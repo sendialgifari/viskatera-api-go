@@ -1,0 +1,59 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+README.md
+API_DOCUMENTATION.md
+API_ENDPOINTS.md
+DEPLOYMENT.md
+FRESH_MIGRATION.md
+GETTING_STARTED.md
+PRODUCTION_CHECKLIST.md
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# Build artifacts
+tmp/
+viskatera-api
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+test_api.sh
+
+# Development files
+.env
+.env.local
+.env.development
+.env.test
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Scripts (optional, bisa di-include jika diperlukan)
+scripts/
+
+# Uploads (akan menggunakan volume di production)
+uploads/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+

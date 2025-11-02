@@ -1,0 +1,3 @@
+# This file ensures the ssl directory is tracked by git
+# SSL certificates and keys are ignored by .gitignore for security
+

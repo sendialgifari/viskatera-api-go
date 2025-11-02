@@ -1,0 +1,117 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+viskatera-api
+viskatera-api.exe
+tmp/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+coverage.xml
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Air (hot reload tool) logs and cache
+.air.toml.bak
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.test
+.env.production
+.env.prod
+*.env
+!env.example
+
+# Application logs
+*.log
+logs/
+app.log
+*.log.*
+
+# PID files
+*.pid
+viskatera-api.pid
+
+# User uploaded files (should not be in git)
+uploads/
+!uploads/.gitkeep
+
+# SSL Certificates and sensitive configs
+nginx/ssl/*
+!nginx/ssl/.gitkeep
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+*.cer
+
+# Database files (if any local database files exist)
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE and Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.iml
+.DS_Store
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# Build and deployment artifacts
+dist/
+build/
+*.tar.gz
+*.zip
+*.rar
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# Swagger generated files (if auto-generated, uncomment if needed)
+# docs/swagger.json
+# docs/swagger.yaml
+
+# Docker volumes and local data
+docker-data/
+.docker/
+
+# Miscellaneous
+*.orig
+*.rej
+.cache/
+
