@@ -4,6 +4,8 @@ services:
     image: postgres:15-alpine
     container_name: viskatera_postgres_prod
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:5433:5432"  # Expose ke host dengan port 5433 (internal container tetap 5432)
     environment:
       POSTGRES_DB: ${DB_NAME:-viskatera_db}
       POSTGRES_USER: ${DB_USER:-postgres}
@@ -34,7 +36,7 @@ services:
     environment:
       # Database
       DB_HOST: postgres
-      DB_PORT: 5433
+      DB_PORT: 5432  # Port internal container (PostgreSQL listen di 5432 di dalam container)
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME:-viskatera_db}

@@ -132,7 +132,7 @@ Create `.env` file with production values:
 ```bash
 # Database (use production database, not Docker)
 DB_HOST=your-production-db-host
-DB_PORT=5432
+DB_PORT=5433
 DB_USER=viskatera_user
 DB_PASSWORD=strong-password-here
 DB_NAME=viskatera_db
@@ -357,7 +357,7 @@ Runs automatically when models change. Preserves all data.
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `DB_HOST` | Database host | `localhost` | Yes |
-| `DB_PORT` | Database port | `5432` | Yes |
+| `DB_PORT` | Database port | `5433` | Yes |
 | `DB_USER` | Database user | - | Yes |
 | `DB_PASSWORD` | Database password | - | Yes |
 | `DB_NAME` | Database name | `viskatera_db` | Yes |

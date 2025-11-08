@@ -47,7 +47,7 @@ cp env.example .env
 Edit file `.env`:
 ```
 DB_HOST=localhost
-DB_PORT=5432
+DB_PORT=5433
 DB_USER=postgres
 DB_PASSWORD=your_password
 DB_NAME=viskatera_db

@@ -195,7 +195,7 @@ PORT=8080
 
 # Database (with SSL)
 DB_HOST=your-db-host
-DB_PORT=5432
+DB_PORT=5433
 DB_USER=viskatera_user
 DB_PASSWORD=<strong-password>
 DB_NAME=viskatera_db

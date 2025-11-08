@@ -99,7 +99,7 @@ nano .env
 ```env
 # Database
 DB_HOST=postgres
-DB_PORT=5432
+DB_PORT=5433
 DB_USER=viskatera_user
 DB_PASSWORD=<GENERATE_STRONG_PASSWORD>
 DB_NAME=viskatera_db

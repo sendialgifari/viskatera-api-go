@@ -90,7 +90,7 @@ Nginx (Port 80/443) - SSL Termination, Rate Limiting
    ↓
 API Container (Port 8080) - Go Application
    ↓
-PostgreSQL Container (Port 5432) - Database
+PostgreSQL Container (Port 5433) - Database
    ↓
 Volumes - Persistent Data Storage
 ```
