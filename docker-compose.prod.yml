@@ -87,14 +87,14 @@ services:
       - no-new-privileges:true
 
   # Nginx Reverse Proxy (internal only - exposed to localhost for host nginx)
-  # Host nginx will proxy to this container on port 8000
+  # Host nginx will proxy to this container on port 8001
   # This maintains rate limiting and other nginx configurations
   nginx:
     image: nginx:alpine
     container_name: viskatera_nginx_prod
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8000:80"  # Expose to localhost only for host nginx proxy
+      - "127.0.0.1:8001:80"  # Expose to localhost only for host nginx proxy
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
