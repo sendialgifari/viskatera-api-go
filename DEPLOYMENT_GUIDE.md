@@ -154,9 +154,132 @@ openssl rand -base64 32
 chmod 600 .env
 ```
 
-## 🔒 Step 3: Setup SSL Certificate (Let's Encrypt)
+## 🌐 Step 3: Konfigurasi Host Nginx (Jika Sudah Ada Nginx di Host)
 
-### 3.1 Initial SSL Certificate Request
+**PENTING:** Jika Anda sudah memiliki nginx yang berjalan di host VPS dan menggunakan port 80/443 untuk aplikasi lain, ikuti langkah ini. Docker nginx container tidak akan mengikat port 80/443 ke host.
+
+### 3.1 Konfigurasi Host Nginx
+
+Docker container sudah dikonfigurasi untuk expose ke localhost saja:
+- **API Container**: `127.0.0.1:8080`
+- **Nginx Container**: `127.0.0.1:8000` (opsional, mempertahankan rate limiting)
+
+Anda perlu mengkonfigurasi host nginx untuk proxy ke Docker container.
+
+#### Opsi A: Proxy ke Docker Nginx Container (Recommended)
+
+Konfigurasi ini mempertahankan rate limiting dan semua optimisasi yang ada di Docker nginx:
+
+```bash
+# Salin contoh konfigurasi
+sudo cp /opt/viskatera-api-go/nginx/host-nginx-example.conf /etc/nginx/sites-available/api.ahmadcorp.com
+
+# Atau buat manual:
+sudo nano /etc/nginx/sites-available/api.ahmadcorp.com
+```
+
+Konten file `/etc/nginx/sites-available/api.ahmadcorp.com`:
+
+```nginx
+# HTTP Server - Redirect to HTTPS
+server {
+    listen 80;
+    listen [::]:80;
+    server_name api.ahmadcorp.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}
+
+# HTTPS Server
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name api.ahmadcorp.com;
+
+    # SSL Configuration
+    ssl_certificate /etc/letsencrypt/live/api.ahmadcorp.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.ahmadcorp.com/privkey.pem;
+    
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+
+    # Security Headers
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    # Proxy ke Docker nginx container
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $server_name;
+        proxy_set_header Connection "";
+        
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+    }
+}
+```
+
+#### Opsi B: Proxy Langsung ke API Container
+
+Jika ingin lebih sederhana (tapi kehilangan rate limiting dari Docker nginx):
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header Connection "";
+}
+```
+
+### 3.2 Enable Site dan Test Konfigurasi
+
+```bash
+# Enable site
+sudo ln -s /etc/nginx/sites-available/api.ahmadcorp.com /etc/nginx/sites-enabled/
+
+# Test nginx configuration
+sudo nginx -t
+
+# Reload nginx
+sudo systemctl reload nginx
+```
+
+### 3.3 Verifikasi
+
+```bash
+# Test koneksi ke Docker container
+curl http://127.0.0.1:8080/health  # API container
+curl http://127.0.0.1:8000/health  # Nginx container (jika pakai Opsi A)
+
+# Test via host nginx
+curl -k https://api.ahmadcorp.com/health
+```
+
+**Catatan:** Pastikan port 8080 dan 8000 tidak digunakan oleh aplikasi lain. Jika sudah digunakan, ubah port mapping di `docker-compose.prod.yml`.
+
+## 🔒 Step 4: Setup SSL Certificate (Let's Encrypt)
+
+### 4.1 Initial SSL Certificate Request
 
 **PENTING:** Pastikan domain sudah mengarah ke IP VPS sebelum lanjut!
 
@@ -196,22 +319,22 @@ sudo cp /etc/letsencrypt/live/api.ahmadcorp.com/chain.pem nginx/ssl/live/api.ahm
 sudo chown -R $USER:$USER nginx/ssl
 ```
 
-### 3.2 Update nginx config untuk initial setup
+### 4.2 Update nginx config untuk initial setup (Jika menggunakan Docker nginx saja)
 
 Sebelum certificate tersedia, update nginx config untuk allow HTTP sementara:
 
 Edit `nginx/conf.d/api.ahmadcorp.com.conf` dan comment SSL lines untuk initial setup.
 
-## 🚀 Step 4: Build dan Deploy
+## 🚀 Step 5: Build dan Deploy
 
-### 4.1 Build Docker Images
+### 5.1 Build Docker Images
 
 ```bash
 # Build images
 docker-compose -f docker-compose.prod.yml build --no-cache
 ```
 
-### 4.2 Start Services
+### 5.2 Start Services
 
 ```bash
 # Start semua services
@@ -224,7 +347,7 @@ docker-compose -f docker-compose.prod.yml ps
 docker-compose -f docker-compose.prod.yml logs -f
 ```
 
-### 4.3 Verify Deployment
+### 5.3 Verify Deployment
 
 ```bash
 # Check health endpoint
@@ -237,9 +360,9 @@ curl https://api.ahmadcorp.com/health
 docker ps
 ```
 
-## 🔄 Step 5: Setup Auto-Renewal SSL Certificate
+## 🔄 Step 6: Setup Auto-Renewal SSL Certificate
 
-### 5.1 Create Renewal Script
+### 6.1 Create Renewal Script
 
 ```bash
 cat > /opt/viskatera-api-go/renew-ssl.sh << 'EOF'
@@ -256,7 +379,7 @@ EOF
 chmod +x /opt/viskatera-api-go/renew-ssl.sh
 ```
 
-### 5.2 Setup Cron Job untuk Auto-Renewal
+### 6.2 Setup Cron Job untuk Auto-Renewal
 
 ```bash
 # Edit crontab
@@ -270,7 +393,7 @@ crontab -e
 
 Container certbot di docker-compose sudah otomatis renew setiap 12 jam.
 
-## 📊 Step 6: Monitoring dan Maintenance
+## 📊 Step 7: Monitoring dan Maintenance
 
 ### 6.1 Check Logs
 
