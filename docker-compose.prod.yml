@@ -1,16 +1,62 @@
 services:
+  # Traefik Reverse Proxy & SSL Termination
+  traefik:
+    image: traefik:v3.0
+    container_name: viskatera_traefik_prod
+    restart: unless-stopped
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@ahmadcorp.com}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.http.tls.certresolver=letsencrypt"
+      - "--log.level=INFO"
+      - "--accesslog=true"
+      - "--metrics.prometheus=true"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"  # Traefik dashboard (internal only)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik_certs:/letsencrypt
+    networks:
+      - viskatera_network
+    labels:
+      - "traefik.enable=true"
+    security_opt:
+      - no-new-privileges:true
+
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
     container_name: viskatera_postgres_prod
     restart: unless-stopped
     ports:
-      - "127.0.0.1:5433:5432"  # Expose ke host dengan port 5433 (internal container tetap 5432)
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_DB: ${DB_NAME:-viskatera_db}
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
+      # Performance tuning
+      POSTGRES_SHARED_BUFFERS: 256MB
+      POSTGRES_EFFECTIVE_CACHE_SIZE: 1GB
+      POSTGRES_MAINTENANCE_WORK_MEM: 64MB
+      POSTGRES_CHECKPOINT_COMPLETION_TARGET: 0.9
+      POSTGRES_WAL_BUFFERS: 16MB
+      POSTGRES_DEFAULT_STATISTICS_TARGET: 100
+      POSTGRES_RANDOM_PAGE_COST: 1.1
+      POSTGRES_EFFECTIVE_IO_CONCURRENCY: 200
+      POSTGRES_WORK_MEM: 4MB
+      POSTGRES_MIN_WAL_SIZE: 1GB
+      POSTGRES_MAX_WAL_SIZE: 4GB
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./backups:/backups
@@ -24,6 +70,24 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: viskatera_redis_prod
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru --save 60 1000
+    volumes:
+      - redis_data:/data
+    networks:
+      - viskatera_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+
   # Go API Application
   api:
     build:
@@ -31,15 +95,20 @@ services:
       dockerfile: Dockerfile
     container_name: viskatera_api_prod
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8080:8080"  # Expose ke localhost saja untuk host nginx
     environment:
       # Database
       DB_HOST: postgres
-      DB_PORT: 5432  # Port internal container (PostgreSQL listen di 5432 di dalam container)
+      DB_PORT: 5432
       DB_USER: ${DB_USER:-postgres}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME:-viskatera_db}
+      DB_SSLMODE: disable
+      
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ""
+      REDIS_DB: 0
       
       # Application
       ENVIRONMENT: production
@@ -48,6 +117,7 @@ services:
       
       # Security
       JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRY: 24h
       
       # External Services
       XENDIT_SECRET_KEY: ${XENDIT_SECRET_KEY}
@@ -72,13 +142,39 @@ services:
       # File Upload
       UPLOAD_DIR: /app/uploads
       MAX_UPLOAD_SIZE: 10485760
+      
+      # Performance
+      CACHE_ENABLED: "true"
+      CACHE_TTL: 300
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - uploads_data:/app/uploads
     networks:
       - viskatera_network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.ahmadcorp.com`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.api.middlewares=api-compress,api-secureheaders,api-ratelimit"
+      - "traefik.http.services.api.loadbalancer.server.port=8080"
+      # Middlewares
+      - "traefik.http.middlewares.api-compress.compress=true"
+      - "traefik.http.middlewares.api-secureheaders.headers.sslredirect=true"
+      - "traefik.http.middlewares.api-secureheaders.headers.stsSeconds=31536000"
+      - "traefik.http.middlewares.api-secureheaders.headers.stsIncludeSubdomains=true"
+      - "traefik.http.middlewares.api-secureheaders.headers.stsPreload=true"
+      - "traefik.http.middlewares.api-secureheaders.headers.forceSTSHeader=true"
+      - "traefik.http.middlewares.api-secureheaders.headers.frameDeny=true"
+      - "traefik.http.middlewares.api-secureheaders.headers.contentTypeNosniff=true"
+      - "traefik.http.middlewares.api-secureheaders.headers.browserXssFilter=true"
+      - "traefik.http.middlewares.api-ratelimit.ratelimit.average=100"
+      - "traefik.http.middlewares.api-ratelimit.ratelimit.period=1s"
+      - "traefik.http.middlewares.api-ratelimit.ratelimit.burst=50"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
@@ -88,56 +184,16 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # Nginx Reverse Proxy (internal only - exposed to localhost for host nginx)
-  # Host nginx will proxy to this container on port 8001
-  # This maintains rate limiting and other nginx configurations
-  nginx:
-    image: nginx:alpine
-    container_name: viskatera_nginx_prod
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:8001:80"  # Expose to localhost only for host nginx proxy
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-      - ./nginx/ssl:/etc/nginx/ssl:ro
-      - certbot_data:/var/www/certbot
-      - certbot_etc:/etc/letsencrypt
-    networks:
-      - viskatera_network
-    depends_on:
-      - api
-    healthcheck:
-      test: ["CMD", "nginx", "-t"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    security_opt:
-      - no-new-privileges:true
-
-  # Certbot for SSL Certificate Auto-Renewal
-  certbot:
-    image: certbot/certbot
-    container_name: viskatera_certbot
-    volumes:
-      - certbot_data:/var/www/certbot
-      - certbot_etc:/etc/letsencrypt
-    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
-    networks:
-      - viskatera_network
-    restart: unless-stopped
-
 volumes:
   postgres_data:
     driver: local
   uploads_data:
     driver: local
-  certbot_data:
+  redis_data:
     driver: local
-  certbot_etc:
+  traefik_certs:
     driver: local
 
 networks:
   viskatera_network:
     driver: bridge
-

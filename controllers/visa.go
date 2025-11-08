@@ -1,6 +1,9 @@
 package controllers
 
 import (
+	"crypto/md5"
+	"encoding/hex"
+	"fmt"
 	"net/http"
 	"strconv"
 	"viskatera-api-go/config"
@@ -44,8 +47,6 @@ type UpdateVisaRequest struct {
 // @Failure 500 {object} models.APIResponse
 // @Router /visas [get]
 func GetVisas(c *gin.Context) {
-	var visas []models.Visa
-
 	// Get query parameters
 	country := c.Query("country")
 	visaType := c.Query("type")
@@ -62,6 +63,33 @@ func GetVisas(c *gin.Context) {
 		perPageInt = 10
 	}
 
+	// Create cache key
+	cacheKey := fmt.Sprintf("visas:%s:%s:%d:%d", country, visaType, pageInt, perPageInt)
+	hash := md5.Sum([]byte(cacheKey))
+	cacheKey = fmt.Sprintf("visas:%s", hex.EncodeToString(hash[:]))
+
+	ctx := c.Request.Context()
+	cacheTTL := config.GetCacheTTL()
+
+	// Try to get from cache
+	if config.CacheEnabled {
+		var cachedData struct {
+			Visas []models.Visa `json:"visas"`
+			Total int           `json:"total"`
+		}
+		if err := config.CacheGet(ctx, cacheKey, &cachedData); err == nil {
+			c.JSON(http.StatusOK, models.PaginatedResponse(
+				"Visas retrieved successfully (cached)",
+				cachedData.Visas,
+				pageInt,
+				perPageInt,
+				cachedData.Total,
+			))
+			return
+		}
+	}
+
+	// Query database with optimized indexes
 	query := config.DB.Where("is_active = ?", true)
 
 	if country != "" {
@@ -72,19 +100,32 @@ func GetVisas(c *gin.Context) {
 		query = query.Where("type ILIKE ?", "%"+visaType+"%")
 	}
 
-	// Get total count
+	// Get total count (optimized with index)
 	var total int64
 	query.Model(&models.Visa{}).Count(&total)
 
-	// Apply pagination
+	// Apply pagination and order by created_at for consistency
+	var visas []models.Visa
 	offset := (pageInt - 1) * perPageInt
-	if err := query.Offset(offset).Limit(perPageInt).Find(&visas).Error; err != nil {
+	if err := query.Order("created_at DESC").Offset(offset).Limit(perPageInt).Find(&visas).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, models.ErrorResponse(
 			"Failed to fetch visas",
 			"DATABASE_ERROR",
 			"Please try again later",
 		))
 		return
+	}
+
+	// Cache the result
+	if config.CacheEnabled {
+		cacheData := struct {
+			Visas []models.Visa `json:"visas"`
+			Total int           `json:"total"`
+		}{
+			Visas: visas,
+			Total: int(total),
+		}
+		config.CacheSet(ctx, cacheKey, cacheData, cacheTTL)
 	}
 
 	c.JSON(http.StatusOK, models.PaginatedResponse(
@@ -118,6 +159,28 @@ func GetVisaByID(c *gin.Context) {
 		return
 	}
 
+	cacheKey := fmt.Sprintf("visa:%d", id)
+	ctx := c.Request.Context()
+	cacheTTL := config.GetCacheTTL()
+
+	// Try to get from cache
+	if config.CacheEnabled {
+		var cachedData struct {
+			Visa    models.Visa         `json:"visa"`
+			Options []models.VisaOption `json:"options"`
+		}
+		if err := config.CacheGet(ctx, cacheKey, &cachedData); err == nil {
+			c.JSON(http.StatusOK, models.SuccessResponse(
+				"Visa retrieved successfully (cached)",
+				gin.H{
+					"visa":    cachedData.Visa,
+					"options": cachedData.Options,
+				},
+			))
+			return
+		}
+	}
+
 	var visa models.Visa
 	if err := config.DB.Where("id = ? AND is_active = ?", id, true).First(&visa).Error; err != nil {
 		c.JSON(http.StatusNotFound, models.ErrorResponse(
@@ -128,13 +191,25 @@ func GetVisaByID(c *gin.Context) {
 		return
 	}
 
-	// Get visa options
+	// Get visa options (optimized with index)
 	var options []models.VisaOption
-	config.DB.Where("visa_id = ? AND is_active = ?", visa.ID, true).Find(&options)
+	config.DB.Where("visa_id = ? AND is_active = ?", visa.ID, true).Order("price ASC").Find(&options)
 
 	responseData := gin.H{
 		"visa":    visa,
 		"options": options,
+	}
+
+	// Cache the result
+	if config.CacheEnabled {
+		cacheData := struct {
+			Visa    models.Visa         `json:"visa"`
+			Options []models.VisaOption `json:"options"`
+		}{
+			Visa:    visa,
+			Options: options,
+		}
+		config.CacheSet(ctx, cacheKey, cacheData, cacheTTL)
 	}
 
 	c.JSON(http.StatusOK, models.SuccessResponse(
@@ -185,6 +260,12 @@ func CreateVisa(c *gin.Context) {
 			"Please try again later",
 		))
 		return
+	}
+
+	// Invalidate cache
+	if config.CacheEnabled {
+		ctx := c.Request.Context()
+		config.CacheDeletePattern(ctx, "visas:*")
 	}
 
 	// Log activity
@@ -295,6 +376,13 @@ func UpdateVisa(c *gin.Context) {
 		"is_active":   visa.IsActive,
 	}
 
+	// Invalidate cache
+	if config.CacheEnabled {
+		ctx := c.Request.Context()
+		config.CacheDelete(ctx, fmt.Sprintf("visa:%d", visa.ID))
+		config.CacheDeletePattern(ctx, "visas:*")
+	}
+
 	// Log activity
 	userID := utils.GetUserIDFromContextWithDefault(c)
 	entityName := visa.Country + " - " + visa.Type
@@ -354,6 +442,13 @@ func DeleteVisa(c *gin.Context) {
 			"Please try again later",
 		))
 		return
+	}
+
+	// Invalidate cache
+	if config.CacheEnabled {
+		ctx := c.Request.Context()
+		config.CacheDelete(ctx, fmt.Sprintf("visa:%d", visa.ID))
+		config.CacheDeletePattern(ctx, "visas:*")
 	}
 
 	c.JSON(http.StatusOK, models.SuccessResponse(

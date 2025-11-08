@@ -58,6 +58,9 @@ func main() {
 	config.ConnectDB()
 	config.MigrateDB()
 
+	// Connect to Redis cache
+	config.ConnectRedis()
+
 	// Setup routes
 	r := routes.SetupRoutes()
 
@@ -102,6 +105,11 @@ func main() {
 	// Close database connection
 	if err := config.CloseDB(); err != nil {
 		log.Printf("Error closing database: %v", err)
+	}
+
+	// Close Redis connection
+	if err := config.CloseRedis(); err != nil {
+		log.Printf("Error closing Redis: %v", err)
 	}
 
 	log.Println("Server exited gracefully")

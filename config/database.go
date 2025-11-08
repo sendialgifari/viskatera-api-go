@@ -58,14 +58,19 @@ func ConnectDB() {
 		log.Fatal("Failed to get database instance:", err)
 	}
 
-	// SetMaxIdleConns sets the maximum number of connections in the idle connection pool
-	sqlDB.SetMaxIdleConns(10)
+	// Optimized connection pool settings for production
+	// SetMaxIdleConns: Keep more idle connections to reduce connection overhead
+	sqlDB.SetMaxIdleConns(25)
 
-	// SetMaxOpenConns sets the maximum number of open connections to the database
+	// SetMaxOpenConns: Increase max connections for high traffic
+	// Formula: ((core_count * 2) + effective_spindle_count)
 	sqlDB.SetMaxOpenConns(100)
 
-	// SetConnMaxLifetime sets the maximum amount of time a connection may be reused
+	// SetConnMaxLifetime: Reuse connections efficiently
 	sqlDB.SetConnMaxLifetime(time.Hour)
+
+	// SetConnMaxIdleTime: Close idle connections after 10 minutes
+	sqlDB.SetConnMaxIdleTime(10 * time.Minute)
 
 	log.Println("Database connected successfully with connection pooling configured!")
 }

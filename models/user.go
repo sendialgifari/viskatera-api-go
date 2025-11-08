@@ -15,15 +15,15 @@ const (
 
 type User struct {
 	ID          uint           `json:"id" gorm:"primaryKey"`
-	Email       string         `json:"email" gorm:"unique;not null"`
+	Email       string         `json:"email" gorm:"unique;not null;index:idx_user_email_active"`
 	Password    string         `json:"-" gorm:"not null"`
-	Name        string         `json:"name" gorm:"not null"`
+	Name        string         `json:"name" gorm:"not null;index:idx_user_name"`
 	AvatarURL   string         `json:"avatar_url"`
-	GoogleID    string         `json:"google_id" gorm:"index"`
-	Role        UserRole       `json:"role" gorm:"type:varchar(20);default:'customer'"`
-	IsActive    bool           `json:"is_active" gorm:"default:true"`
-	LastLoginAt *time.Time     `json:"last_login_at" gorm:"index"`
-	CreatedAt   time.Time      `json:"created_at"`
+	GoogleID    string         `json:"google_id" gorm:"index:idx_user_google,unique"`
+	Role        UserRole       `json:"role" gorm:"type:varchar(20);default:'customer';index:idx_user_role_active"`
+	IsActive    bool           `json:"is_active" gorm:"default:true;index:idx_user_email_active,idx_user_role_active"`
+	LastLoginAt *time.Time     `json:"last_login_at" gorm:"index:idx_user_last_login"`
+	CreatedAt   time.Time      `json:"created_at" gorm:"index:idx_user_created"`
 	UpdatedAt   time.Time      `json:"updated_at"`
 	DeletedAt   gorm.DeletedAt `json:"-" gorm:"index"`
 }
