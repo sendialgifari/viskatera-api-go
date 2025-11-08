@@ -11,7 +11,7 @@ echo ""
 
 # Load environment variables
 if [ -f .env ]; then
-    export $(cat .env | grep -v '^#' | xargs)
+    export $(grep -v '^#' .env | xargs)
 else
     echo "Error: .env file not found!"
     exit 1
@@ -47,7 +47,6 @@ if ! docker-compose -f docker-compose.prod.yml ps postgres | grep -q "Up"; then
     echo "Waiting for PostgreSQL to be ready..."
     maxtries=15
     for i in $(seq 1 $maxtries); do
-        # Try with "postgres" user, fallback to "$DB_USER" if needed
         if docker-compose -f docker-compose.prod.yml exec -T postgres pg_isready -h localhost -p 5432 -U postgres > /dev/null 2>&1; then
             break
         elif docker-compose -f docker-compose.prod.yml exec -T postgres pg_isready -h localhost -p 5432 -U "$DB_USER" > /dev/null 2>&1; then
@@ -66,36 +65,41 @@ else
     done
 fi
 
-# Determine superuser/admin for first access
-# If role "postgres" does NOT exist, fallback to "$DB_USER"
+# Try admin as "postgres", if fails fallback to "DB_USER"
 ADMIN_USER="postgres"
-ROLE_EXISTS=$(docker-compose -f docker-compose.prod.yml exec -T postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='postgres'" || echo "")
-if [ "$ROLE_EXISTS" != "1" ]; then
+# Test if can connect as 'postgres' and database 'postgres' exists
+CAN_CONNECT=$(docker-compose -f docker-compose.prod.yml exec -T postgres psql -U "$ADMIN_USER" -d postgres -c '\q' 2>&1 || true)
+if echo "$CAN_CONNECT" | grep -qi "does not exist"; then
+    # Try using DB_USER as admin, but ensure DB_NAME exists for connecting
+    echo "psql: error: connection to server on socket \"/var/run/postgresql/.s.PGSQL.5432\" failed: FATAL:  role \"postgres\" does not exist"
     echo "⚠️  Role \"postgres\" does not exist, using DB_USER ($DB_USER) as admin"
     ADMIN_USER="$DB_USER"
+    # Special init: If DB_NAME does not exist, create it using template1
+    DB_EXISTS=$(docker-compose -f docker-compose.prod.yml exec -T postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" -U "$ADMIN_USER" -d template1 2>/dev/null || true)
+    if [ "$DB_EXISTS" != "1" ]; then
+        echo "Database \"$DB_NAME\" does not exist; creating it from template1..."
+        docker-compose -f docker-compose.prod.yml exec -T postgres psql -U "$ADMIN_USER" -d template1 -c "CREATE DATABASE $DB_NAME;" || true
+    fi
 fi
 
+# Now try to create the user if not exists. Use template1 as fallback database context for creation.
 echo "Creating user $DB_USER if not exists..."
-docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U "$ADMIN_USER" <<EOF
-DO \$\$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_user WHERE usename = '$DB_USER') THEN
-        CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';
-        RAISE NOTICE 'User $DB_USER created';
-    ELSE
-        RAISE NOTICE 'User $DB_USER already exists';
-        ALTER USER $DB_USER WITH PASSWORD '$DB_PASSWORD';
-        RAISE NOTICE 'Password updated for user $DB_USER';
-    END IF;
-END
-\$\$;
-EOF
+USER_EXISTS=$(docker-compose -f docker-compose.prod.yml exec -T postgres psql -qAt -U "$ADMIN_USER" -d "$DB_NAME" -c "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER';" 2>/dev/null || true)
+if [ "$USER_EXISTS" != "1" ]; then
+    # User not exists, create
+    docker-compose -f docker-compose.prod.yml exec -T postgres psql -U "$ADMIN_USER" -d "$DB_NAME" -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASSWORD';" >/dev/null 2>&1 && \
+        echo "User $DB_USER created."
+else
+    # User exists, update password
+    docker-compose -f docker-compose.prod.yml exec -T postgres psql -U "$ADMIN_USER" -d "$DB_NAME" -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASSWORD';" >/dev/null 2>&1 && \
+        echo "User $DB_USER already exists (password updated)."
+fi
 
 # Create database if not exists
 echo "Creating database $DB_NAME if not exists..."
-DB_EXISTS=$(docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U "$ADMIN_USER" -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'")
+DB_EXISTS=$(docker-compose -f docker-compose.prod.yml exec -T postgres psql -U "$ADMIN_USER" -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" -d template1 2>/dev/null || true)
 if [ "$DB_EXISTS" != "1" ]; then
-    docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U "$ADMIN_USER" -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+    docker-compose -f docker-compose.prod.yml exec -T postgres psql -U "$ADMIN_USER" -d template1 -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;" && \
     echo "Database $DB_NAME created."
 else
     echo "Database $DB_NAME already exists."
@@ -103,21 +107,21 @@ fi
 
 # Grant privileges on database
 echo "Granting privileges on database..."
-docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U "$ADMIN_USER" -c "
+docker-compose -f docker-compose.prod.yml exec -T postgres psql -U "$ADMIN_USER" -d "$DB_NAME" -c "
 GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
 ALTER DATABASE $DB_NAME OWNER TO $DB_USER;
-"
+" >/dev/null 2>&1
 
 # Grant schema privileges
 echo "Granting schema privileges..."
-docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U "$ADMIN_USER" -d $DB_NAME -c "
+docker-compose -f docker-compose.prod.yml exec -T postgres psql -U "$ADMIN_USER" -d "$DB_NAME" -c "
 GRANT ALL ON SCHEMA public TO $DB_USER;
 ALTER SCHEMA public OWNER TO $DB_USER;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $DB_USER;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO $DB_USER;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO $DB_USER;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO $DB_USER;
-"
+" >/dev/null 2>&1
 
 echo ""
 echo "=========================================="
@@ -132,8 +136,8 @@ if [ $? -eq 0 ]; then
     echo "✅ Connection test successful!"
 else
     echo "❌ Connection test failed!"
-    echo "psql: error: connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  role \"$DB_USER\" does not exist"
-    echo "  Please check that user \"$DB_USER\" exists and is correctly referenced in your .env and PostgreSQL instance."
+    echo "psql: error: connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  database \"$DB_NAME\" does not exist"
+    echo "  Please check that database \"$DB_NAME\" exists and user \"$DB_USER\" is correctly referenced in your .env and PostgreSQL instance."
     exit 1
 fi
 echo ""
