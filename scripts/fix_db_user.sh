@@ -35,8 +35,6 @@ echo ""
 
 # Detect container name and its exposed host port
 CONTAINER_NAME="viskatera_postgres_prod"
-# Use docker-compose port to get host port mapped to container port 5432
-# Fallback to DB_PORT if fails
 HOST_PORT=$(docker-compose -f docker-compose.prod.yml port postgres 5432 | awk -F: '{print $2}' | tr -d '[:space:]')
 if [ -z "$HOST_PORT" ]; then
     HOST_PORT=$DB_PORT
@@ -47,26 +45,38 @@ if ! docker-compose -f docker-compose.prod.yml ps postgres | grep -q "Up"; then
     echo "Starting PostgreSQL container..."
     docker-compose -f docker-compose.prod.yml up -d postgres
     echo "Waiting for PostgreSQL to be ready..."
-    # Wait until PostgreSQL port in container responds
     maxtries=15
     for i in $(seq 1 $maxtries); do
+        # Try with "postgres" user, fallback to "$DB_USER" if needed
         if docker-compose -f docker-compose.prod.yml exec -T postgres pg_isready -h localhost -p 5432 -U postgres > /dev/null 2>&1; then
+            break
+        elif docker-compose -f docker-compose.prod.yml exec -T postgres pg_isready -h localhost -p 5432 -U "$DB_USER" > /dev/null 2>&1; then
             break
         fi
         sleep 2
     done
 else
-    # If running, still check readiness
     for i in {1..10}; do
         if docker-compose -f docker-compose.prod.yml exec -T postgres pg_isready -h localhost -p 5432 -U postgres > /dev/null 2>&1; then
+            break
+        elif docker-compose -f docker-compose.prod.yml exec -T postgres pg_isready -h localhost -p 5432 -U "$DB_USER" > /dev/null 2>&1; then
             break
         fi
         sleep 2
     done
 fi
 
+# Determine superuser/admin for first access
+# If role "postgres" does NOT exist, fallback to "$DB_USER"
+ADMIN_USER="postgres"
+ROLE_EXISTS=$(docker-compose -f docker-compose.prod.yml exec -T postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='postgres'" || echo "")
+if [ "$ROLE_EXISTS" != "1" ]; then
+    echo "⚠️  Role \"postgres\" does not exist, using DB_USER ($DB_USER) as admin"
+    ADMIN_USER="$DB_USER"
+fi
+
 echo "Creating user $DB_USER if not exists..."
-docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U postgres <<EOF
+docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U "$ADMIN_USER" <<EOF
 DO \$\$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_user WHERE usename = '$DB_USER') THEN
@@ -83,9 +93,9 @@ EOF
 
 # Create database if not exists
 echo "Creating database $DB_NAME if not exists..."
-DB_EXISTS=$(docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'")
+DB_EXISTS=$(docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U "$ADMIN_USER" -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'")
 if [ "$DB_EXISTS" != "1" ]; then
-    docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U postgres -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+    docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U "$ADMIN_USER" -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
     echo "Database $DB_NAME created."
 else
     echo "Database $DB_NAME already exists."
@@ -93,14 +103,14 @@ fi
 
 # Grant privileges on database
 echo "Granting privileges on database..."
-docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U postgres -c "
+docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U "$ADMIN_USER" -c "
 GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;
 ALTER DATABASE $DB_NAME OWNER TO $DB_USER;
 "
 
 # Grant schema privileges
 echo "Granting schema privileges..."
-docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U postgres -d $DB_NAME -c "
+docker-compose -f docker-compose.prod.yml exec -T postgres psql -h localhost -p 5432 -U "$ADMIN_USER" -d $DB_NAME -c "
 GRANT ALL ON SCHEMA public TO $DB_USER;
 ALTER SCHEMA public OWNER TO $DB_USER;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO $DB_USER;
@@ -122,8 +132,8 @@ if [ $? -eq 0 ]; then
     echo "✅ Connection test successful!"
 else
     echo "❌ Connection test failed!"
-    echo "psql: error: connection to server on socket \"/var/run/postgresql/.s.PGSQL.$DB_PORT\" failed: No such file or directory"
-    echo "  Is the server running inside the container and accepting connections on that socket and port?"
+    echo "psql: error: connection to server at \"localhost\" (::1), port 5432 failed: FATAL:  role \"$DB_USER\" does not exist"
+    echo "  Please check that user \"$DB_USER\" exists and is correctly referenced in your .env and PostgreSQL instance."
     exit 1
 fi
 echo ""
