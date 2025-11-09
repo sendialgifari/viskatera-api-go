@@ -1,38 +1,4 @@
 services:
-  # Traefik Reverse Proxy & SSL Termination
-  traefik:
-    image: traefik:v3.0
-    container_name: viskatera_traefik_prod
-    restart: unless-stopped
-    command:
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:-admin@ahmadcorp.com}"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json"
-      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
-      - "--entrypoints.websecure.http.tls.certresolver=letsencrypt"
-      - "--log.level=INFO"
-      - "--accesslog=true"
-      - "--metrics.prometheus=true"
-    ports:
-      - "80:80"
-      - "443:443"
-      - "8080:8080"  # Traefik dashboard (internal only)
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - traefik_certs:/letsencrypt
-    networks:
-      - viskatera_network
-    labels:
-      - "traefik.enable=true"
-    security_opt:
-      - no-new-privileges:true
-
   # PostgreSQL Database
   postgres:
     image: postgres:15-alpine
@@ -95,6 +61,8 @@ services:
       dockerfile: Dockerfile
     container_name: viskatera_api_prod
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"  # Expose only to localhost for nginx proxy
     environment:
       # Database
       DB_HOST: postgres
@@ -127,10 +95,10 @@ services:
       # Google OAuth
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
-      GOOGLE_REDIRECT_URL: https://api.ahmadcorp.com/api/v1/auth/google/callback
+      GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-https://api.ahmadcorp.com/api/v1/auth/google/callback}
       
       # URLs
-      APP_BASE_URL: https://api.ahmadcorp.com
+      APP_BASE_URL: ${APP_BASE_URL:-https://api.ahmadcorp.com}
       
       # SMTP
       SMTP_HOST: ${SMTP_HOST}
@@ -155,26 +123,6 @@ services:
       - uploads_data:/app/uploads
     networks:
       - viskatera_network
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`api.ahmadcorp.com`)"
-      - "traefik.http.routers.api.entrypoints=websecure"
-      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.api.middlewares=api-compress,api-secureheaders,api-ratelimit"
-      - "traefik.http.services.api.loadbalancer.server.port=8080"
-      # Middlewares
-      - "traefik.http.middlewares.api-compress.compress=true"
-      - "traefik.http.middlewares.api-secureheaders.headers.sslredirect=true"
-      - "traefik.http.middlewares.api-secureheaders.headers.stsSeconds=31536000"
-      - "traefik.http.middlewares.api-secureheaders.headers.stsIncludeSubdomains=true"
-      - "traefik.http.middlewares.api-secureheaders.headers.stsPreload=true"
-      - "traefik.http.middlewares.api-secureheaders.headers.forceSTSHeader=true"
-      - "traefik.http.middlewares.api-secureheaders.headers.frameDeny=true"
-      - "traefik.http.middlewares.api-secureheaders.headers.contentTypeNosniff=true"
-      - "traefik.http.middlewares.api-secureheaders.headers.browserXssFilter=true"
-      - "traefik.http.middlewares.api-ratelimit.ratelimit.average=100"
-      - "traefik.http.middlewares.api-ratelimit.ratelimit.period=1s"
-      - "traefik.http.middlewares.api-ratelimit.ratelimit.burst=50"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
@@ -190,8 +138,6 @@ volumes:
   uploads_data:
     driver: local
   redis_data:
-    driver: local
-  traefik_certs:
     driver: local
 
 networks:
