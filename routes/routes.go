@@ -70,6 +70,9 @@ func SetupRoutes() *gin.Engine {
 		// Visa routes (public)
 		public.GET("/visas", controllers.GetVisas)
 		public.GET("/visas/:id", controllers.GetVisaByID)
+
+		// Webhook routes (no authentication required)
+		public.POST("/webhooks/xendit", controllers.XenditWebhook)
 	}
 
 	// Expose file uploads so they can be accessed in the browser, e.g. /uploads/visas/visa_1_1761988882.png
@@ -109,6 +112,10 @@ func SetupRoutes() *gin.Engine {
 		protected.GET("/activities/visa/:visa_id", controllers.GetVisaActivities)
 		protected.GET("/activities/purchase/:purchase_id", controllers.GetPurchaseActivities)
 		protected.GET("/activities/payment/:payment_id", controllers.GetPaymentActivities)
+
+		// Monitoring routes
+		protected.GET("/monitoring/queues", controllers.GetQueueStats)
+		protected.GET("/monitoring/queues/health", controllers.GetQueueHealth)
 	}
 
 	// Admin routes (admin authentication required)

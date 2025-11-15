@@ -26,8 +26,10 @@ Panduan lengkap dan mendalam untuk membangun aplikasi Viskatera API dari awal hi
 - **ORM**: GORM (gorm.io/gorm)
 - **Database**: PostgreSQL 15
 - **Cache**: Redis 7
+- **Message Queue**: RabbitMQ 3.12 (github.com/rabbitmq/amqp091-go)
 - **Authentication**: JWT (JSON Web Tokens)
 - **Payment Gateway**: Xendit
+- **PDF Generation**: gofpdf (github.com/jung-kurt/gofpdf)
 - **Documentation**: Swagger/OpenAPI
 
 ### Application Architecture
@@ -87,10 +89,14 @@ viskatera-api-go/
 ├── utils/                  # Utility functions
 │   ├── jwt.go             # JWT token generation
 │   ├── password.go        # Password hashing
-│   ├── email.go           # Email sending
+│   ├── email.go           # Email sending with attachment
+│   ├── pdf.go             # PDF invoice generation
 │   ├── image.go           # Image processing
 │   ├── token.go           # Token generation
 │   └── activity_logger.go # Activity logging
+├── workers/                # Background workers
+│   ├── worker.go          # Worker initialization
+│   └── email_worker.go    # Email and PDF worker
 ├── scripts/                # Utility scripts
 │   ├── migrate.go         # Database migration
 │   ├── seed_data.go       # Seed sample data
@@ -142,6 +148,9 @@ go get github.com/swaggo/files
 go get github.com/nfnt/resize
 go get github.com/jung-kurt/gofpdf
 go get github.com/xuri/excelize/v2
+
+# Message Queue
+go get github.com/rabbitmq/amqp091-go
 ```
 
 ### Step 3: Create Environment Configuration
@@ -1033,6 +1042,153 @@ sudo certbot --nginx -d api.ahmadcorp.com
    - Document API with Swagger
    - Write clear code comments
    - Maintain README and guides
+
+---
+
+## RabbitMQ Integration
+
+### Setup RabbitMQ Connection
+
+Create `config/queue.go`:
+
+```go
+package config
+
+import (
+    "fmt"
+    "log"
+    "os"
+    amqp "github.com/rabbitmq/amqp091-go"
+)
+
+var RabbitMQConn *amqp.Connection
+var RabbitMQChan *amqp.Channel
+
+func ConnectRabbitMQ() error {
+    host := os.Getenv("RABBITMQ_HOST")
+    port := os.Getenv("RABBITMQ_PORT")
+    user := os.Getenv("RABBITMQ_USER")
+    pass := os.Getenv("RABBITMQ_PASS")
+    
+    amqpURL := fmt.Sprintf("amqp://%s:%s@%s:%s/", user, pass, host, port)
+    
+    conn, err := amqp.Dial(amqpURL)
+    if err != nil {
+        return err
+    }
+    
+    ch, err := conn.Channel()
+    if err != nil {
+        return err
+    }
+    
+    RabbitMQConn = conn
+    RabbitMQChan = ch
+    
+    // Declare queues
+    DeclareQueues()
+    
+    return nil
+}
+```
+
+### Publishing Messages
+
+```go
+// Publish email job to queue
+job := map[string]interface{}{
+    "purchase_id": purchase.ID,
+    "user_id":     user.ID,
+    "email":       user.Email,
+    "type":        "invoice",
+}
+jobJSON, _ := json.Marshal(job)
+config.PublishMessage(config.QueueEmailInvoice, jobJSON)
+```
+
+### Worker Implementation
+
+Workers process messages in parallel:
+
+```go
+func StartEmailWorker(concurrency int) error {
+    // Set QoS for parallel processing
+    ch.Qos(concurrency, 0, false)
+    
+    // Consume messages
+    msgs, _ := ch.Consume(queueName, "", false, false, false, false, nil)
+    
+    // Start multiple workers
+    for i := 0; i < concurrency; i++ {
+        go func(workerID int) {
+            for msg := range msgs {
+                processEmail(msg, workerID)
+            }
+        }(i)
+    }
+    
+    return nil
+}
+```
+
+### PDF Generation
+
+```go
+func GenerateInvoicePDF(data InvoiceData) (string, error) {
+    pdf := gofpdf.New("P", "mm", "A4", "")
+    pdf.AddPage()
+    
+    // Add content
+    pdf.SetFont("Arial", "B", 16)
+    pdf.Cell(40, 10, "Invoice")
+    
+    // ... add invoice details
+    
+    // Save PDF
+    filename := fmt.Sprintf("invoice_%s.pdf", data.InvoiceNumber)
+    return pdf.OutputFileAndClose(filename)
+}
+```
+
+### Email with Attachment
+
+```go
+func SendEmailWithAttachment(to, subject, body, pdfPath string) error {
+    // Read PDF file
+    pdfData, _ := ioutil.ReadFile(pdfPath)
+    encoded := base64.StdEncoding.EncodeToString(pdfData)
+    
+    // Build multipart email
+    boundary := "----=_NextPart_"
+    msg := buildMultipartEmail(to, subject, body, boundary, encoded)
+    
+    // Send email
+    return smtp.SendMail(addr, auth, from, []string{to}, []byte(msg))
+}
+```
+
+### Webhook Handler
+
+```go
+func XenditWebhook(c *gin.Context) {
+    var payload XenditWebhookPayload
+    c.ShouldBindJSON(&payload)
+    
+    // Update payment status
+    payment.Status = payload.Status
+    
+    // If paid, send success email via RabbitMQ
+    if payload.Status == "PAID" {
+        job := map[string]interface{}{
+            "purchase_id": purchase.ID,
+            "user_id":     user.ID,
+            "email":       user.Email,
+            "type":        "payment_success",
+        }
+        config.PublishMessage(config.QueueEmailPaymentSuccess, jobJSON)
+    }
+}
+```
 
 ---
 

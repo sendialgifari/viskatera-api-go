@@ -1024,6 +1024,92 @@ const docTemplate = `{
                 }
             }
         },
+        "/monitoring/queues": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get statistics for all RabbitMQ queues including message counts for email_invoice, email_payment_success, and generate_pdf queues",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Monitoring"
+                ],
+                "summary": "Get RabbitMQ queue statistics",
+                "responses": {
+                    "200": {
+                        "description": "Queue statistics retrieved successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to get queue statistics",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/monitoring/queues/health": {
+            "get": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get health status of RabbitMQ connection including connection status and total messages in all queues",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Monitoring"
+                ],
+                "summary": "Get RabbitMQ health status",
+                "responses": {
+                    "200": {
+                        "description": "RabbitMQ is healthy",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Failed to get queue statistics",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "RabbitMQ connection is not available",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/payments": {
             "post": {
                 "security": [
@@ -1197,7 +1283,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Create a new visa purchase. Automatically calculates total price including optional visa option.",
+                "description": "Create a new visa purchase. Automatically calculates total price including optional visa option. Sends invoice email via RabbitMQ asynchronously.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1221,31 +1307,31 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "201": {
-                        "description": "Created",
+                        "description": "Visa purchase created successfully",
                         "schema": {
                             "$ref": "#/definitions/models.APIResponse"
                         }
                     },
                     "400": {
-                        "description": "Bad Request",
+                        "description": "Invalid request data",
                         "schema": {
                             "$ref": "#/definitions/models.APIResponse"
                         }
                     },
                     "401": {
-                        "description": "Unauthorized",
+                        "description": "User not authenticated",
                         "schema": {
                             "$ref": "#/definitions/models.APIResponse"
                         }
                     },
                     "404": {
-                        "description": "Not Found",
+                        "description": "Visa not found or inactive",
                         "schema": {
                             "$ref": "#/definitions/models.APIResponse"
                         }
                     },
                     "500": {
-                        "description": "Internal Server Error",
+                        "description": "Failed to create purchase",
                         "schema": {
                             "$ref": "#/definitions/models.APIResponse"
                         }
@@ -1710,6 +1796,58 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/webhooks/xendit": {
+            "post": {
+                "description": "Handle Xendit payment webhook notifications. Automatically updates payment status, purchase status, and sends payment success email with PDF invoice via RabbitMQ when payment is successful.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "Webhook"
+                ],
+                "summary": "Xendit payment webhook",
+                "parameters": [
+                    {
+                        "description": "Xendit webhook payload",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/controllers.XenditWebhookPayload"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Webhook processed successfully",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Invalid webhook payload",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Payment not found",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal server error",
+                        "schema": {
+                            "$ref": "#/definitions/models.APIResponse"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
@@ -1827,6 +1965,32 @@ const docTemplate = `{
                 },
                 "purchase_id": {
                     "type": "integer"
+                }
+            }
+        },
+        "controllers.XenditWebhookPayload": {
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number"
+                },
+                "created": {
+                    "type": "string"
+                },
+                "currency": {
+                    "type": "string"
+                },
+                "external_id": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "updated": {
+                    "type": "string"
                 }
             }
         },
@@ -2027,12 +2191,12 @@ const docTemplate = `{
 
 // SwaggerInfo holds exported Swagger Info so clients can modify it
 var SwaggerInfo = &swag.Spec{
-	Version:          "1.0.0",
+	Version:          "1.1.0",
 	Host:             "localhost:8080",
 	BasePath:         "/api/v1",
 	Schemes:          []string{"http", "https"},
 	Title:            "Viskatera API",
-	Description:      "Comprehensive Visa Management API with role-based authentication, OTP login, payment processing, and document management",
+	Description:      "Comprehensive Visa Management API with role-based authentication, OTP login, payment processing, document management, and asynchronous email/PDF processing via RabbitMQ",
 	InfoInstanceName: "swagger",
 	SwaggerTemplate:  docTemplate,
 	LeftDelim:        "{{",

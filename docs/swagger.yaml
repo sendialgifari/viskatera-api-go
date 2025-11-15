@@ -85,6 +85,23 @@ definitions:
     - payment_method
     - purchase_id
     type: object
+  controllers.XenditWebhookPayload:
+    properties:
+      amount:
+        type: number
+      created:
+        type: string
+      currency:
+        type: string
+      external_id:
+        type: string
+      id:
+        type: string
+      status:
+        type: string
+      updated:
+        type: string
+    type: object
   models.APIError:
     properties:
       code:
@@ -215,13 +232,14 @@ info:
     name: Viskatera API Support
     url: https://viskatera.com/support
   description: Comprehensive Visa Management API with role-based authentication, OTP
-    login, payment processing, and document management
+    login, payment processing, document management, and asynchronous email/PDF processing
+    via RabbitMQ
   license:
     name: MIT
     url: https://opensource.org/licenses/MIT
   termsOfService: http://swagger.io/terms/
   title: Viskatera API
-  version: 1.0.0
+  version: 1.1.0
 paths:
   /activities:
     get:
@@ -871,6 +889,62 @@ paths:
       summary: Login user
       tags:
       - Authentication
+  /monitoring/queues:
+    get:
+      consumes:
+      - application/json
+      description: Get statistics for all RabbitMQ queues including message counts
+        for email_invoice, email_payment_success, and generate_pdf queues
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Queue statistics retrieved successfully
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "500":
+          description: Failed to get queue statistics
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get RabbitMQ queue statistics
+      tags:
+      - Monitoring
+  /monitoring/queues/health:
+    get:
+      consumes:
+      - application/json
+      description: Get health status of RabbitMQ connection including connection status
+        and total messages in all queues
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: RabbitMQ is healthy
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "500":
+          description: Failed to get queue statistics
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "503":
+          description: RabbitMQ connection is not available
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+      security:
+      - BearerAuth: []
+      summary: Get RabbitMQ health status
+      tags:
+      - Monitoring
   /payments:
     post:
       consumes:
@@ -982,7 +1056,7 @@ paths:
       consumes:
       - application/json
       description: Create a new visa purchase. Automatically calculates total price
-        including optional visa option.
+        including optional visa option. Sends invoice email via RabbitMQ asynchronously.
       parameters:
       - description: Purchase request data
         in: body
@@ -994,23 +1068,23 @@ paths:
       - application/json
       responses:
         "201":
-          description: Created
+          description: Visa purchase created successfully
           schema:
             $ref: '#/definitions/models.APIResponse'
         "400":
-          description: Bad Request
+          description: Invalid request data
           schema:
             $ref: '#/definitions/models.APIResponse'
         "401":
-          description: Unauthorized
+          description: User not authenticated
           schema:
             $ref: '#/definitions/models.APIResponse'
         "404":
-          description: Not Found
+          description: Visa not found or inactive
           schema:
             $ref: '#/definitions/models.APIResponse'
         "500":
-          description: Internal Server Error
+          description: Failed to create purchase
           schema:
             $ref: '#/definitions/models.APIResponse'
       security:
@@ -1316,6 +1390,42 @@ paths:
       summary: Get visa by ID
       tags:
       - Visa
+  /webhooks/xendit:
+    post:
+      consumes:
+      - application/json
+      description: Handle Xendit payment webhook notifications. Automatically updates
+        payment status, purchase status, and sends payment success email with PDF
+        invoice via RabbitMQ when payment is successful.
+      parameters:
+      - description: Xendit webhook payload
+        in: body
+        name: payload
+        required: true
+        schema:
+          $ref: '#/definitions/controllers.XenditWebhookPayload'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Webhook processed successfully
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "400":
+          description: Invalid webhook payload
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "404":
+          description: Payment not found
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+        "500":
+          description: Internal server error
+          schema:
+            $ref: '#/definitions/models.APIResponse'
+      summary: Xendit payment webhook
+      tags:
+      - Webhook
 schemes:
 - http
 - https

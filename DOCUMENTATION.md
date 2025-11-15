@@ -32,11 +32,15 @@ Viskatera API is a comprehensive visa management system with role-based authenti
   - Google OAuth login
 
 - **Protected APIs** (perlu login):
-  - Purchase visa
+  - Purchase visa (automatically sends invoice email)
   - List purchase history
   - Update purchase status
   - Upload documents
   - Export data (Excel/PDF)
+  - Monitor RabbitMQ queue statistics
+
+- **Webhook APIs** (public):
+  - Xendit payment webhook (automatically sends payment success email with PDF)
 
 - **Admin APIs**:
   - Create, update, delete visas
@@ -47,6 +51,7 @@ Viskatera API is a comprehensive visa management system with role-based authenti
 - **Backend**: Go 1.24+ with Gin Framework
 - **Database**: PostgreSQL 15
 - **Cache**: Redis 7
+- **Message Queue**: RabbitMQ 3.12
 - **Authentication**: JWT (JSON Web Tokens)
 - **Payment**: Xendit Integration
 - **Documentation**: Swagger/OpenAPI
@@ -436,6 +441,104 @@ DELETE /api/v1/admin/visas/{id}
 Authorization: Bearer <admin_jwt_token>
 ```
 
+### Webhook Endpoints
+
+#### 19. Xendit Payment Webhook
+```http
+POST /api/v1/webhooks/xendit
+Content-Type: application/json
+```
+
+**Request Body (from Xendit):**
+```json
+{
+  "id": "invoice_id_from_xendit",
+  "external_id": "payment_123_1234567890",
+  "status": "PAID",
+  "amount": 500000,
+  "currency": "IDR",
+  "created": "2024-01-01T00:00:00Z",
+  "updated": "2024-01-01T00:00:00Z"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Webhook processed successfully",
+  "data": {
+    "payment_id": 1,
+    "status": "paid"
+  },
+  "timestamp": "2024-01-01T00:00:00Z"
+}
+```
+
+**Note:** This endpoint automatically:
+- Updates payment status in database
+- Updates purchase status to "completed"
+- Sends payment success email with PDF invoice via RabbitMQ
+
+### Monitoring Endpoints
+
+#### 20. Get Queue Statistics
+```http
+GET /api/v1/monitoring/queues
+Authorization: Bearer <jwt_token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Queue statistics retrieved successfully",
+  "data": {
+    "queues": {
+      "email_invoice": {
+        "messages": 5,
+        "messages_ready": 5
+      },
+      "email_payment_success": {
+        "messages": 2,
+        "messages_ready": 2
+      },
+      "generate_pdf": {
+        "messages": 0,
+        "messages_ready": 0
+      }
+    },
+    "total_queues": 3
+  },
+  "timestamp": "2024-01-01T00:00:00Z"
+}
+```
+
+#### 21. Get Queue Health
+```http
+GET /api/v1/monitoring/queues/health
+Authorization: Bearer <jwt_token>
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "RabbitMQ is healthy",
+  "data": {
+    "status": "healthy",
+    "connected": true,
+    "total_messages": 7,
+    "queues": {
+      "email_invoice": 5,
+      "email_payment_success": 2,
+      "generate_pdf": 0
+    }
+  },
+  "timestamp": "2024-01-01T00:00:00Z"
+}
+```
+
 ### Error Codes
 
 | Code | Description |
@@ -508,6 +611,8 @@ curl -X POST http://localhost:8080/api/v1/purchases \
 Browser → Nginx (VPS, port 80/443) → API Container (Docker, port 8080)
                                     → PostgreSQL Container
                                     → Redis Container
+                                    → RabbitMQ Container
+                                    → Background Workers (Email & PDF)
 ```
 
 ### Step 1: Setup Environment Variables
@@ -568,6 +673,15 @@ SMTP_FROM=noreply@ahmadcorp.com
 # File Upload
 UPLOAD_DIR=/app/uploads
 MAX_UPLOAD_SIZE=10485760
+
+# RabbitMQ
+RABBITMQ_HOST=rabbitmq
+RABBITMQ_PORT=5672
+RABBITMQ_USER=admin
+RABBITMQ_PASS=<GENERATE_STRONG_PASSWORD>
+RABBITMQ_VHOST=/
+WORKER_CONCURRENCY=10
+# Worker concurrency: number of parallel workers (default: 10)
 ```
 
 **Generate Strong Secrets:**
@@ -774,7 +888,111 @@ docker-compose -f docker-compose.prod.yml exec postgres pg_isready -U viskatera_
 
 ---
 
+## Email & PDF Automation
+
+### Overview
+
+The system uses RabbitMQ for asynchronous email and PDF generation to ensure fast API responses and parallel processing.
+
+### Features
+
+1. **Automatic Invoice Email**
+   - When a customer creates a purchase, an invoice email is automatically sent via RabbitMQ
+   - Email is sent asynchronously, so API response is not delayed
+   - Email includes purchase details and payment link
+
+2. **Payment Success Email with PDF**
+   - When Xendit webhook confirms payment success, an email is automatically sent
+   - Email includes a PDF invoice attachment
+   - PDF is generated asynchronously via RabbitMQ
+
+3. **Parallel Processing**
+   - Multiple workers process emails and PDFs in parallel
+   - Default: 10 parallel workers (configurable via `WORKER_CONCURRENCY`)
+   - If 10 emails arrive in 1 second, all 10 are processed simultaneously
+
+### RabbitMQ Queues
+
+- **`email_invoice`**: Queue for invoice emails (sent when purchase is created)
+- **`email_payment_success`**: Queue for payment success emails with PDF (sent when payment is confirmed)
+- **`generate_pdf`**: Queue for PDF generation jobs (used internally)
+
+### Configuration
+
+Set `WORKER_CONCURRENCY` in `.env` to control parallel processing:
+```env
+WORKER_CONCURRENCY=10  # Process 10 emails/PDFs simultaneously
+```
+
+### Monitoring
+
+Use the monitoring endpoints to check queue status:
+- `GET /api/v1/monitoring/queues` - Get statistics for all queues
+- `GET /api/v1/monitoring/queues/health` - Check RabbitMQ health
+
+### RabbitMQ Management UI
+
+Access RabbitMQ Management UI at:
+- **Development**: http://localhost:15672
+- **Production**: http://localhost:15672 (only accessible from VPS)
+- **Default credentials**: admin / admin123
+
+---
+
 ## Changelog
+
+### Version 1.1.0 - RabbitMQ Integration
+
+#### ✅ New Features
+
+##### 1. RabbitMQ Message Queue
+- ✅ RabbitMQ 3.12 with Management UI
+- ✅ Asynchronous email processing
+- ✅ Parallel PDF generation
+- ✅ Queue monitoring endpoints
+
+##### 2. Email Automation
+- ✅ Automatic invoice email when purchase is created
+- ✅ Automatic payment success email with PDF when payment is confirmed
+- ✅ Email with PDF attachment support
+- ✅ HTML email templates
+
+##### 3. PDF Invoice Generation
+- ✅ Automatic PDF invoice generation
+- ✅ Professional invoice format
+- ✅ Includes purchase details, pricing, and payment information
+- ✅ Attached to payment success emails
+
+##### 4. Xendit Webhook Integration
+- ✅ Webhook endpoint for Xendit payment notifications
+- ✅ Automatic payment status update
+- ✅ Automatic purchase status update to "completed"
+- ✅ Triggers payment success email with PDF
+
+##### 5. Monitoring
+- ✅ Queue statistics endpoint
+- ✅ Queue health check endpoint
+- ✅ Real-time queue monitoring
+
+#### 🔧 Configuration Changes
+
+**New Environment Variables:**
+```env
+RABBITMQ_HOST=rabbitmq
+RABBITMQ_PORT=5672
+RABBITMQ_USER=admin
+RABBITMQ_PASS=admin123
+RABBITMQ_VHOST=/
+WORKER_CONCURRENCY=10
+```
+
+**New Docker Services:**
+- RabbitMQ container with Management UI
+
+**New API Endpoints:**
+- `POST /api/v1/webhooks/xendit` - Xendit webhook handler
+- `GET /api/v1/monitoring/queues` - Queue statistics
+- `GET /api/v1/monitoring/queues/health` - Queue health check
 
 ### Version 1.0.0 - Production Release
 

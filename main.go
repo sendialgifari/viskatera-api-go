@@ -10,6 +10,7 @@ import (
 	"time"
 	"viskatera-api-go/config"
 	"viskatera-api-go/routes"
+	"viskatera-api-go/workers"
 
 	_ "viskatera-api-go/docs"
 
@@ -18,8 +19,8 @@ import (
 )
 
 // @title Viskatera API
-// @version 1.0.0
-// @description Comprehensive Visa Management API with role-based authentication, OTP login, payment processing, and document management
+// @version 1.1.0
+// @description Comprehensive Visa Management API with role-based authentication, OTP login, payment processing, document management, and asynchronous email/PDF processing via RabbitMQ
 // @termsOfService http://swagger.io/terms/
 
 // @contact.name Viskatera API Support
@@ -60,6 +61,16 @@ func main() {
 
 	// Connect to Redis cache
 	config.ConnectRedis()
+
+	// Connect to RabbitMQ
+	if err := config.ConnectRabbitMQ(); err != nil {
+		log.Printf("Warning: Failed to connect to RabbitMQ: %v. Email and PDF generation will not work.", err)
+	} else {
+		// Start background workers
+		go func() {
+			workers.InitializeWorkers()
+		}()
+	}
 
 	// Setup routes
 	r := routes.SetupRoutes()
@@ -110,6 +121,11 @@ func main() {
 	// Close Redis connection
 	if err := config.CloseRedis(); err != nil {
 		log.Printf("Error closing Redis: %v", err)
+	}
+
+	// Close RabbitMQ connection
+	if err := config.CloseRabbitMQ(); err != nil {
+		log.Printf("Error closing RabbitMQ: %v", err)
 	}
 
 	log.Println("Server exited gracefully")

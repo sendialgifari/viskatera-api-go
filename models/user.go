@@ -19,7 +19,7 @@ type User struct {
 	Password    string         `json:"-" gorm:"not null"`
 	Name        string         `json:"name" gorm:"not null;index:idx_user_name"`
 	AvatarURL   string         `json:"avatar_url"`
-	GoogleID    string         `json:"google_id" gorm:"index:idx_user_google,unique"`
+	GoogleID    string         `json:"google_id" gorm:"index:idx_user_google"`
 	Role        UserRole       `json:"role" gorm:"type:varchar(20);default:'customer';index:idx_user_role_active"`
 	IsActive    bool           `json:"is_active" gorm:"default:true;index:idx_user_email_active,idx_user_role_active"`
 	LastLoginAt *time.Time     `json:"last_login_at" gorm:"index:idx_user_last_login"`

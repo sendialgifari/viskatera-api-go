@@ -1,6 +1,8 @@
 package controllers
 
 import (
+	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"viskatera-api-go/config"
@@ -17,17 +19,17 @@ type UpdatePurchaseStatusRequest struct {
 
 // PurchaseVisa godoc
 // @Summary Purchase a visa
-// @Description Create a new visa purchase. Automatically calculates total price including optional visa option.
+// @Description Create a new visa purchase. Automatically calculates total price including optional visa option. Sends invoice email via RabbitMQ asynchronously.
 // @Tags Purchase
 // @Accept json
 // @Produce json
 // @Security BearerAuth
 // @Param request body models.PurchaseRequest true "Purchase request data"
-// @Success 201 {object} models.APIResponse
-// @Failure 400 {object} models.APIResponse
-// @Failure 401 {object} models.APIResponse
-// @Failure 404 {object} models.APIResponse
-// @Failure 500 {object} models.APIResponse
+// @Success 201 {object} models.APIResponse "Visa purchase created successfully"
+// @Failure 400 {object} models.APIResponse "Invalid request data"
+// @Failure 401 {object} models.APIResponse "User not authenticated"
+// @Failure 404 {object} models.APIResponse "Visa not found or inactive"
+// @Failure 500 {object} models.APIResponse "Failed to create purchase"
 // @Router /purchases [post]
 func PurchaseVisa(c *gin.Context) {
 	userID, exists := c.Get("user_id")
@@ -99,10 +101,28 @@ func PurchaseVisa(c *gin.Context) {
 	// Load related data for response
 	config.DB.Preload("Visa").Preload("VisaOption").First(&purchase, purchase.ID)
 
+	// Get user details for email
+	var user models.User
+	config.DB.First(&user, userID)
+
 	// Log activity
 	logUserID := utils.GetUserIDFromContextWithDefault(c)
 	entityName := "Purchase #" + strconv.Itoa(int(purchase.ID)) + " - " + purchase.Visa.Country
 	utils.LogCreate(c, logUserID, models.EntityPurchase, purchase.ID, entityName, purchase)
+
+	// Send invoice email via RabbitMQ
+	go func() {
+		job := map[string]interface{}{
+			"purchase_id": purchase.ID,
+			"user_id":     userID.(uint),
+			"email":       user.Email,
+			"type":        "invoice",
+		}
+		jobJSON, _ := json.Marshal(job)
+		if err := config.PublishMessage(config.QueueEmailInvoice, jobJSON); err != nil {
+			log.Printf("[ERROR] Failed to publish invoice email job: %v", err)
+		}
+	}()
 
 	c.JSON(http.StatusCreated, models.SuccessResponse(
 		"Visa purchase created successfully",
